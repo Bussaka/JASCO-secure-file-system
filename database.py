@@ -1,129 +1,210 @@
 import sqlite3
+from tkinter import simpledialog, messagebox
 
-def create_connection():
-    """Creates and returns a database connection."""
-    return sqlite3.connect("users.db")
+# Connect to the SQLite database
+conn = sqlite3.connect("users.db")
+cursor = conn.cursor()
 
-def create_users_table():
-    """Creates the users table with a role column."""
-    conn = create_connection()
-    cursor = conn.cursor()
+# Initialize the database by creating necessary tables
+def initialize_database():
+    """Create the 'users', 'files', and 'logs' tables if they do not exist."""
+    # Drop existing tables (if they exist)
+    cursor.execute("DROP TABLE IF EXISTS users")
+    cursor.execute("DROP TABLE IF EXISTS files")
+    cursor.execute("DROP TABLE IF EXISTS logs")
 
+    # Create the 'users' table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user'
+            role TEXT NOT NULL DEFAULT 'user',
+            position TEXT NOT NULL
         )
     """)
 
-    conn.commit()
-    conn.close()
-
-def create_files_table():
-    """Creates the encrypted_files table to store encrypted files."""
-    conn = create_connection()
-    cursor = conn.cursor()
-
+    # Create the 'files' table for file encryption tracking
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS encrypted_files (
+        CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            filepath TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            file_path TEXT NOT NULL,
             encryption_key TEXT NOT NULL,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    conn.commit()
-    conn.close()
+    # Create the 'logs' table for tracking system events
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            event TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-def register_user(username, password):
-    """Registers a new user with default role 'user'."""
-    conn = create_connection()
-    cursor = conn.cursor()
-    
+    conn.commit()
+    print("Database initialized successfully!")
+
+# Predefined positions for dropdown selection
+POSITIONS = [
+    "CEO", "HR Manager", "Office Admin", "Finance Manager", "Accountant",
+    "IT Manager", "IT Support Technician", "Sales Manager",
+    "Operations Manager", "Secretary", "Compliance Officer"
+]
+
+def register_user(username, password, position):
+    """Registers a new user with a role and position."""
+    if position not in POSITIONS:
+        return False  # Invalid position selection
+
     try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')", (username, password))
+        cursor.execute("INSERT INTO users (username, password, role, position) VALUES (?, ?, 'user', ?)",
+                       (username, password, position))
         conn.commit()
-        conn.close()
         return True
     except sqlite3.IntegrityError:
-        conn.close()
         return False  # Username already exists
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return False  # Other database errors
 
 def login_user(username, password):
-    """Checks user credentials and returns role ('admin' or 'user')."""
-    conn = create_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
-    result = cursor.fetchone()
-    
-    conn.close()
-    return result[0] if result else None  # Returns 'admin' or 'user' if found, else None
+    """Verifies user credentials, logs failed attempts, and returns role ('admin' or 'user')."""
+    try:
+        cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
+        result = cursor.fetchone()
 
-def create_admin():
-    """Creates an admin user if not already in the system."""
-    conn = create_connection()
-    cursor = conn.cursor()
+        if result:
+            log_event(username, "LOGIN SUCCESSFUL")  # Log successful login
+            return result[0]  # Return 'admin' or 'user'
 
-    cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')")
+        log_event(username, "FAILED LOGIN ATTEMPT")  # Log failed login attempt
+        return None  # Login failed
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None  # Database error
+
+def log_event(username, event):
+    """Logs system events such as login attempts, encryption, and decryption."""
+    try:
+        cursor.execute("INSERT INTO logs (username, event) VALUES (?, ?)", (username, event))
         conn.commit()
-        print("✅ Admin user created successfully!")
-    else:
-        print("⚠️ Admin already exists.")
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
 
-    conn.close()
+def save_encrypted_file(sender, recipient, file_path, encryption_key):
+    """Stores encrypted file details in the database with the encryption key."""
+    try:
+        cursor.execute("INSERT INTO files (sender, recipient, file_path, encryption_key) VALUES (?, ?, ?, ?)", 
+                       (sender, recipient, file_path, encryption_key))
+        conn.commit()
+        log_event(sender, f"ENCRYPTED FILE '{file_path}' SENT TO {recipient}")
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
 
-def store_encrypted_file(filename, filepath, encryption_key):
-    """Stores encrypted file details in the database."""
-    conn = create_connection()
-    cursor = conn.cursor()
+def get_user_files(username):
+    """Retrieves files that were sent to the given user."""
+    try:
+        cursor.execute("SELECT id, file_path, encryption_key FROM files WHERE recipient=?", (username,))
+        return cursor.fetchall()  # Returns full file details
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
 
-    cursor.execute("INSERT INTO encrypted_files (filename, filepath, encryption_key) VALUES (?, ?, ?)", 
-                   (filename, filepath, encryption_key))
+def retrieve_encrypted_file(user, file_id):
+    """Fetches an encrypted file for a specific user from the database."""
+    try:
+        cursor.execute("SELECT file_path, encryption_key FROM files WHERE id=? AND recipient=?", (file_id, user))
+        result = cursor.fetchone()
+        if result:
+            return result  # Returns file path and encryption key
+        return None  # No file found or unauthorized access
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
 
-    conn.commit()
-    conn.close()
-
-def retrieve_encrypted_file(filename):
-    """Retrieves the file path and encryption key from the database."""
-    conn = create_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT filepath, encryption_key FROM encrypted_files WHERE filename=?", (filename,))
-    result = cursor.fetchone()
-
-    conn.close()
-    return result  # Returns (filepath, encryption_key) if found, else None
-
-def list_stored_files():
-    """Lists all encrypted files stored in the database."""
-    conn = create_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT id, filename, timestamp FROM encrypted_files")
-    files = cursor.fetchall()
-
-    conn.close()
-    return files  # Returns a list of (id, filename, timestamp)
+def get_all_files():
+    """Retrieves all encrypted files (Admin Access)."""
+    try:
+        cursor.execute("SELECT id, sender, recipient, file_path, timestamp FROM files ORDER BY timestamp DESC")
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
 
 def delete_encrypted_file(file_id):
-    """Deletes an encrypted file from the database using its ID."""
-    conn = create_connection()
-    cursor = conn.cursor()
+    """Deletes an encrypted file record from the database."""
+    try:
+        cursor.execute("DELETE FROM files WHERE id=?", (file_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
 
-    cursor.execute("DELETE FROM encrypted_files WHERE id=?", (file_id,))
-    conn.commit()
-    conn.close()
+def get_all_users():
+    """Retrieves all registered users and their positions."""
+    try:
+        cursor.execute("SELECT username, position FROM users ORDER BY username ASC")
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
 
-# Run these functions once to set up the database
-if __name__ == "__main__":
-    create_users_table()   # Ensure the users table exists
-    create_files_table()   # Ensure the encrypted_files table exists
-    create_admin()         # Ensure the admin user exists
-    print("✅ Database setup complete!")
+def decrypt_file(user, file_id):
+    """Logs and manages file decryption events."""
+    file_info = retrieve_encrypted_file(user, file_id)
+    if file_info:
+        log_event(user, f"DECRYPTED FILE: {file_info[0]}")
+    else:
+        log_event(user, "FAILED DECRYPTION ATTEMPT")
+
+def list_stored_files():
+    """Retrieves all stored encrypted files from the database (for Admin)."""
+    try:
+        cursor.execute("SELECT id, file_path, sender, recipient, timestamp FROM files ORDER BY timestamp DESC")
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+def get_system_logs():
+    """Retrieves all system logs from the database."""
+    try:
+        cursor.execute("SELECT username, event, timestamp FROM logs ORDER BY timestamp DESC")
+        logs = cursor.fetchall()
+        return logs
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+
+def admin_login_prompt(root):
+    """Prompts for admin login before opening the admin panel."""
+    username = simpledialog.askstring("Admin Login", "Enter admin username:", parent=root)
+    password = simpledialog.askstring("Admin Login", "Enter admin password:", show="*", parent=root)
+
+    if username == "admin" and password == "admin123":
+        return True  # Correct admin credentials
+    else:
+        messagebox.showerror("Access Denied", "Invalid admin credentials!")
+        log_event(username, "FAILED ADMIN LOGIN ATTEMPT")  # Log failed admin login attempt
+        return False  # Incorrect credentials
+
+# Function to manually add an admin (Run once to create an admin)
+def create_admin():
+    try:
+        cursor.execute("INSERT INTO users (username, password, role, position) VALUES ('admin', 'admin123', 'admin', 'CEO')")
+        conn.commit()
+        print("Admin user created successfully!")
+    except sqlite3.IntegrityError:
+        print("Admin already exists.")
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+
+# Uncomment to create an admin user (run once)
+# create_admin()
+
+# Initialize the database when this module is imported
+initialize_database()

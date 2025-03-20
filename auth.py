@@ -1,37 +1,54 @@
+# auth.py
 import sqlite3
 from tkinter import simpledialog, messagebox
+from database import conn, cursor  # Import the database connection and cursor
 
-# Connect to the database
-conn = sqlite3.connect("users.db")
-cursor = conn.cursor()
+# Predefined positions for the dropdown selection
+POSITIONS = [
+    "CEO", "HR Manager", "Office Admin", "Finance Manager", "Accountant",
+    "IT Manager", "IT Support Technician", "Sales Manager",
+    "Operations Manager", "Secretary", "Compliance Officer"
+]
 
-# Recreate the users table with 'role' column if it does not exist
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user'
-    )
-""")
-conn.commit()
+def register_user(username, password, position):
+    """Registers a new user with a role and position."""
+    if position not in POSITIONS:
+        return False  # Invalid position selection
 
-def register_user(username, password):
-    """Registers a new user with a default role 'user'."""
     try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, 'user')", (username, password))
+        cursor.execute("INSERT INTO users (username, password, role, position) VALUES (?, ?, 'user', ?)",
+                       (username, password, position))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
         return False  # Username already exists
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return False  # Other database errors
 
 def login_user(username, password):
-    """Verifies user credentials and returns role ('admin' or 'user')."""
-    cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
-    result = cursor.fetchone()
-    if result:
-        return result[0]  # Return 'admin' or 'user'
-    return None  # Login failed
+    """Verifies user credentials, logs failed attempts, and returns role ('admin' or 'user')."""
+    try:
+        cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
+        result = cursor.fetchone()
+
+        if result:
+            log_event(username, "LOGIN SUCCESSFUL")  # Log successful login
+            return result[0]  # Return 'admin' or 'user'
+
+        log_event(username, "FAILED LOGIN ATTEMPT")  # Log failed login attempt
+        return None  # Login failed
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None  # Database error
+
+def log_event(username, event):
+    """Logs system events such as login attempts, encryption, and decryption."""
+    try:
+        with open("system_logs.txt", "a") as log_file:
+            log_file.write(f"User: {username} - {event}\n")
+    except Exception as e:
+        print(f"Error writing to log file: {e}")
 
 def admin_login_prompt(root):
     """Prompts for admin login before opening the admin panel."""
@@ -42,16 +59,19 @@ def admin_login_prompt(root):
         return True  # Correct admin credentials
     else:
         messagebox.showerror("Access Denied", "Invalid admin credentials!")
+        log_event(username, "FAILED ADMIN LOGIN ATTEMPT")  # Log failed admin login attempt
         return False  # Incorrect credentials
 
 # Function to manually add an admin (Run once to create an admin)
 def create_admin():
     try:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')")
+        cursor.execute("INSERT INTO users (username, password, role, position) VALUES ('admin', 'admin123', 'admin', 'CEO')")
         conn.commit()
         print("Admin user created successfully!")
     except sqlite3.IntegrityError:
         print("Admin already exists.")
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
 
 # Uncomment to create an admin user (run once)
 # create_admin()
